@@ -1,23 +1,23 @@
-package main
+package outputset
 
 import "github.com/andersfylling/go-sortnet/sortnet"
 
-func NewSet(sequenceSize int) *Set {
-	return sortnet.PopulateOutputSet(&Set{}, sequenceSize).(*Set)
+func NewPartitionedUnordered(sequenceSize int) *PartitionedUnordered {
+	return sortnet.PopulateOutputSet(&PartitionedUnordered{}, sequenceSize).(*PartitionedUnordered)
 }
 
-type Set struct {
+type PartitionedUnordered struct {
 	Partitions [][]sortnet.BinarySequence
 	OnesMasks  []sortnet.BinarySequence
 	ZerosMasks []sortnet.BinarySequence
 }
 
-func (s *Set) Contains(seq sortnet.BinarySequence) bool {
+func (s *PartitionedUnordered) Contains(seq sortnet.BinarySequence) bool {
 	partition := seq.OnesCount()
 	return s.ContainsInPartition(seq, partition)
 }
 
-func (s *Set) ContainsInPartition(seq sortnet.BinarySequence, partition int) bool {
+func (s *PartitionedUnordered) ContainsInPartition(seq sortnet.BinarySequence, partition int) bool {
 	for _, storedSeq := range s.Partitions[partition] {
 		if seq == storedSeq {
 			return true
@@ -26,7 +26,7 @@ func (s *Set) ContainsInPartition(seq sortnet.BinarySequence, partition int) boo
 	return false
 }
 
-func (s *Set) Add(seq sortnet.BinarySequence) {
+func (s *PartitionedUnordered) Add(seq sortnet.BinarySequence) {
 	partition := seq.OnesCount()
 	if partition >= len(s.Partitions) {
 		for i := len(s.Partitions); i <= partition; i++ {
@@ -42,8 +42,8 @@ func (s *Set) Add(seq sortnet.BinarySequence) {
 	}
 }
 
-func (s *Set) Derive(network sortnet.Network) *Set {
-	output := &Set{}
+func (s *PartitionedUnordered) Derive(network sortnet.Network) *PartitionedUnordered {
+	output := &PartitionedUnordered{}
 
 	for _, partition := range s.Partitions {
 		for _, seq := range partition {
@@ -53,7 +53,7 @@ func (s *Set) Derive(network sortnet.Network) *Set {
 	return output
 }
 
-func (s *Set) Size() int {
+func (s *PartitionedUnordered) Size() int {
 	var size int
 	for _, partition := range s.Partitions {
 		size += len(partition)
@@ -62,11 +62,11 @@ func (s *Set) Size() int {
 	return size
 }
 
-func (s *Set) PartitionSize(p int) int {
+func (s *PartitionedUnordered) PartitionSize(p int) int {
 	return len(s.Partitions[p])
 }
 
-func (s *Set) IsSubset(other *Set) bool {
+func (s *PartitionedUnordered) IsSubset(other *PartitionedUnordered) bool {
 	for p := range s.Partitions {
 		for _, seq := range s.Partitions[p] {
 			if !other.ContainsInPartition(seq, p) {

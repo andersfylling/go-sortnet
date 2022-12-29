@@ -3,11 +3,16 @@ package main
 import (
 	"fmt"
 	"github.com/andersfylling/go-sortnet/sortnet"
+	"github.com/andersfylling/go-sortnet/sortnet/outputset"
 )
 
-const N = 7
+const N = 8
 
 func main() {
+	run()
+}
+
+func run() {
 	allComparators := sortnet.AllComparatorCombinations(N)
 	networks := []sortnet.Network{
 		&sortnet.ComparatorNetwork{},
@@ -24,23 +29,10 @@ func main() {
 
 		before := len(networks)
 		PruneSubsumedOutputSets(outputSets)
-
-		for i := range outputSets {
-			if outputSets[i] == nil {
-				networks[i] = nil
-			}
-		}
-
-		for i := 0; i < len(networks); i++ {
-			if networks[i] == nil {
-				networks[i] = networks[len(networks)-1]
-				networks = networks[:len(networks)-1]
-				i--
-			}
-		}
+		networks = NetworksWithNonNilOutputset(outputSets, networks)
 		fmt.Printf("\tpruned %d networks - %d remaining\n", before-len(networks), len(networks))
 
-		if len(networks) == 1 {
+		if len(networks) == 1 && rounds > 1 {
 			break
 		}
 
@@ -61,6 +53,24 @@ func main() {
 	fmt.Println(sortingNetwork)
 }
 
+func NetworksWithNonNilOutputset(sets []*outputset.PartitionedOrdered, networks []sortnet.Network) []sortnet.Network {
+	for i := range sets {
+		if sets[i] == nil {
+			networks[i] = nil
+		}
+	}
+
+	for i := 0; i < len(networks); i++ {
+		if networks[i] == nil {
+			networks[i] = networks[len(networks)-1]
+			networks = networks[:len(networks)-1]
+			i--
+		}
+	}
+
+	return networks
+}
+
 func GenerateNetworks(comparators []sortnet.Comparator, networks []sortnet.Network) []sortnet.Network {
 	derivatives := make([]sortnet.Network, 0, len(networks))
 
@@ -75,22 +85,22 @@ func GenerateNetworks(comparators []sortnet.Comparator, networks []sortnet.Netwo
 	return derivatives
 }
 
-func GenerateOutputSets(networks []sortnet.Network) []*Set {
-	derivatives := make([]*Set, len(networks))
+func GenerateOutputSets(networks []sortnet.Network) []*outputset.PartitionedOrdered {
+	derivatives := make([]*outputset.PartitionedOrdered, len(networks))
 
 	for i, network := range networks {
-		complete := NewSet(N)
+		complete := outputset.NewPartitionedOrdered(N)
 		derivatives[i] = complete.Derive(network)
 	}
 
 	return derivatives
 }
 
-func PruneSubsumedOutputSets(sets []*Set) {
-	subsumes := func(a, b *Set) bool {
-		//if a.Size() > b.Size() {
-		//	return false
-		//}
+func PruneSubsumedOutputSets(sets []*outputset.PartitionedOrdered) {
+	subsumes := func(a, b *outputset.PartitionedOrdered) bool {
+		if a.Size() > b.Size() {
+			return false
+		}
 
 		// permutation preconditions
 		for p := range a.Partitions {
@@ -106,26 +116,28 @@ func PruneSubsumedOutputSets(sets []*Set) {
 			}
 		}
 
-		return a.IsSubset(b)
+		permutationConstraints := Constraints(b.Metadata, a.Metadata)
+		if !ValidateConstraintsFast(permutationConstraints) {
+			return false
+		}
+
+		return Backtrack(permutationConstraints, func(permutationMap sortnet.PermutationMap) bool {
+			return a.IsSubset(b, permutationMap)
+		})
 	}
 
-	for i := range sets {
-		a := sets[i]
+	for _, a := range sets {
 		if a == nil {
 			continue
 		}
 
-		for j := i + 1; j < len(sets); j++ {
-			b := sets[j]
-			if b == nil {
+		for bi, b := range sets {
+			if b == nil || b == a {
 				continue
 			}
 
 			if subsumes(a, b) {
-				sets[j] = nil
-			} else if subsumes(b, a) {
-				sets[i] = nil
-				break
+				sets[bi] = nil
 			}
 		}
 	}

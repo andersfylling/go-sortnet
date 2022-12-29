@@ -1,6 +1,9 @@
 package sortnet
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type Network interface {
 	Transform(BinarySequence) BinarySequence
@@ -28,17 +31,18 @@ func (n *ComparatorNetwork) String() string {
 	networkStr := strings.Builder{}
 	for channel := 0; channel <= channels; channel++ {
 		channelStr := strings.Builder{}
+		channelStr.WriteString(fmt.Sprintf("%d: ", channel))
 		for _, comparator := range n.comparators {
-			var r rune = '-'
+			r := "-"
 			if comparator.To == channel {
-				r = '+'
+				r = "+"
 			} else if comparator.From == channel {
-				r = '+'
+				r = "^"
 			} else if comparator.To < channel && comparator.From > channel {
-				r = '|'
+				r = "|"
 			}
 
-			channelStr.WriteRune(r)
+			channelStr.WriteString(fmt.Sprintf(" %s", r))
 		}
 		networkStr.WriteString(channelStr.String() + "\n")
 	}
