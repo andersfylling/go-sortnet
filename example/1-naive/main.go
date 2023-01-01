@@ -2,14 +2,31 @@ package main
 
 import (
 	"fmt"
+	"github.com/andersfylling/go-sortnet/example"
 	"github.com/andersfylling/go-sortnet/sortnet"
 	"github.com/andersfylling/go-sortnet/sortnet/outputset"
 )
 
-const N = 8
+// see example/configuration.go
+const (
+	Channels = example.Channels
+	Workers  = example.Workers
+)
+
+// configurable variables
+// see example/configuration.go
+var (
+	NewSet outputset.NewSet = example.NewSet
+)
+
+func init() {
+	if example.PruningStrategy == example.ParallelPruning {
+		panic("parallel pruning has not been implemented")
+	}
+}
 
 func main() {
-	allComparators := sortnet.AllComparatorCombinations(N)
+	allComparators := sortnet.AllComparatorCombinations(Channels)
 	networks := []sortnet.Network{
 		&sortnet.ComparatorNetwork{},
 	}
@@ -38,7 +55,7 @@ func main() {
 	fmt.Println(networks[0])
 }
 
-func NetworksWithNonNilOutputset(sets []*outputset.Unordered, networks []sortnet.Network) []sortnet.Network {
+func NetworksWithNonNilOutputset(sets []sortnet.OutputSet, networks []sortnet.Network) []sortnet.Network {
 	for i := range sets {
 		if sets[i] == nil {
 			networks[i] = nil
@@ -65,17 +82,17 @@ func GenerateNetworks(comparators []sortnet.Comparator, networks []sortnet.Netwo
 	return derivatives
 }
 
-func GenerateOutputSets(networks []sortnet.Network) []*outputset.Unordered {
-	sets := make([]*outputset.Unordered, len(networks))
+func GenerateOutputSets(networks []sortnet.Network) []sortnet.OutputSet {
+	sets := make([]sortnet.OutputSet, len(networks))
 	for i, network := range networks {
-		complete := outputset.NewUnordered(N)
+		complete := NewSet(Channels)
 		sets[i] = complete.Derive(network)
 	}
 
 	return sets
 }
 
-func PruneSubsumedOutputSets(sets []*outputset.Unordered) {
+func PruneSubsumedOutputSets(sets []sortnet.OutputSet) {
 	for _, a := range sets {
 		if a == nil {
 			continue
@@ -86,7 +103,7 @@ func PruneSubsumedOutputSets(sets []*outputset.Unordered) {
 				continue
 			}
 
-			if a.IsSubset(b) {
+			if a.IsSubset(b, nil) {
 				sets[bi] = nil
 			}
 		}

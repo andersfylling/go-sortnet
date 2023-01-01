@@ -20,3 +20,7 @@ func ApplyPermutation(src BinarySequence, permutation PermutationMap) BinarySequ
 
 	return dst
 }
+
+type PermutationGeneratorHook = func(PermutationMap) bool
+
+type GeneratePermutationsFunc = func(channels int, dst, src *SetMetadata, hook PermutationGeneratorHook) bool

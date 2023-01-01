@@ -3,82 +3,63 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/andersfylling/go-sortnet/example"
 	"github.com/andersfylling/go-sortnet/sortnet"
 	"github.com/andersfylling/go-sortnet/sortnet/outputset"
-	"os"
-	"os/signal"
+	"github.com/cheggaaa/pb/v3"
+	"golang.org/x/sync/errgroup"
+	"sync/atomic"
+	"time"
 )
 
-const N = 8
+// see example/configuration.go
+const (
+	Channels = example.Channels
+	Workers  = example.Workers
+)
+
+// configurable variables
+// see example/configuration.go
+var (
+	GeneratePermutations sortnet.GeneratePermutationsFunc = example.GeneratePermutations
+	NewSet               outputset.NewSet                 = example.NewSet
+	PruningStrategy      PruneMethod                      = PruneSerial
+)
+
+func init() {
+	if example.PruningStrategy == example.ParallelPruning {
+		PruningStrategy = PruneParallel
+	}
+}
 
 func main() {
 	run()
 }
 
 func run() {
-	allComparators := sortnet.AllComparatorCombinations(N)
+	allComparators := sortnet.AllComparatorCombinations(Channels)
 	networks := []sortnet.Network{
 		&sortnet.ComparatorNetwork{},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	defer func() {
-		signal.Stop(c)
-		cancel()
-	}()
-	go func() {
-		select {
-		case <-c:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
-	workChan := make(chan *Work, 1000)
-	lookupChannel := make(chan *LookupRequest, 1000)
-
-	for i := 0; i < 10; i++ {
-		go SearchWorker(ctx, workChan, lookupChannel)
-	}
-
-	rounds := 0
+	k := 0
 	for {
-		fmt.Printf("Round %d\n", rounds)
+		fmt.Printf("Round %d\n", k)
+		k++
 
-		networks = GenerateNetworks(allComparators, networks)
-		fmt.Printf("\tgenerated %d networks\n", len(networks))
-		outputSets := GenerateOutputSets(networks)
-		fmt.Println("\tgenerated output sets")
+		var sets []sortnet.OutputSet
+		networks, sets = Generate(allComparators, networks)
+		fmt.Printf("\tgenerated %d networks & output sets\n", len(networks))
 
-		tree := NewKDTree()
-		points := CreateMetadataPoints(outputSets)
-		tree.Insert(points)
-		tree.Balance()
-		fmt.Printf("\tbuilt kd tree with %d dimensions\n", len(points[0].Coordinates()))
-
-		go Producer(tree, outputSets, workChan)
-		WaitForResults(ctx, outputSets, lookupChannel)
-		if ctx.Err() != nil {
-			return
-		}
+		sets = Prune(sets)
 
 		before := len(networks)
-		// PruneSubsumedOutputSets(tree, outputSets)
-		networks = NetworksWithNonNilOutputset(outputSets, networks)
+		networks = NetworksWithNonNilOutputset(sets, networks)
 		fmt.Printf("\tpruned %d networks - %d remaining\n", before-len(networks), len(networks))
 
-		if len(networks) == 1 && rounds > 1 {
+		if len(networks) == 1 && k > 1 || k > 50 {
 			break
 		}
-
-		if rounds > 50 {
-			break
-		}
-		rounds++
 	}
 
 	var sortingNetwork sortnet.Network
@@ -92,7 +73,7 @@ func run() {
 	fmt.Println(sortingNetwork)
 }
 
-func NetworksWithNonNilOutputset(sets []*outputset.PartitionedOrdered, networks []sortnet.Network) []sortnet.Network {
+func NetworksWithNonNilOutputset(sets []sortnet.OutputSet, networks []sortnet.Network) []sortnet.Network {
 	for i := range sets {
 		if sets[i] == nil {
 			networks[i] = nil
@@ -110,34 +91,36 @@ func NetworksWithNonNilOutputset(sets []*outputset.PartitionedOrdered, networks 
 	return networks
 }
 
-func GenerateNetworks(comparators []sortnet.Comparator, networks []sortnet.Network) []sortnet.Network {
+func Generate(comparators []sortnet.Comparator, networks []sortnet.Network) ([]sortnet.Network, []sortnet.OutputSet) {
 	derivatives := make([]sortnet.Network, 0, len(networks))
+	sets := make([]sortnet.OutputSet, 0, len(networks))
 
 	for _, network := range networks {
-		if network == nil {
-			continue
+		set := NewSet(Channels)
+		set = set.Derive(network)
+
+		for _, child := range network.Derive(comparators) {
+			childSet := NewSet(Channels)
+			childSet = childSet.Derive(child)
+
+			if subsumes(set, childSet) {
+				continue
+			}
+
+			derivatives = append(derivatives, child)
+			sets = append(sets, childSet)
 		}
-
-		derivatives = append(derivatives, network.Derive(comparators)...)
 	}
 
-	return derivatives
+	return derivatives, sets
 }
 
-func GenerateOutputSets(networks []sortnet.Network) []*outputset.PartitionedOrdered {
-	derivatives := make([]*outputset.PartitionedOrdered, len(networks))
-
-	for i, network := range networks {
-		complete := outputset.NewPartitionedOrdered(N)
-		derivatives[i] = complete.Derive(network)
-	}
-
-	return derivatives
-}
-
-func CreateMetadataPoints(sets []*outputset.PartitionedOrdered) []*Metadata {
+func CreateMetadataPoints(sets []sortnet.OutputSet) []*Metadata {
 	points := make([]*Metadata, 0, len(sets))
 	for i, s := range sets {
+		if s == nil {
+			continue
+		}
 		point := CreateMetadataPoint(s)
 		point.Index = i
 
@@ -147,155 +130,163 @@ func CreateMetadataPoints(sets []*outputset.PartitionedOrdered) []*Metadata {
 	return points
 }
 
-func CreateMetadataPoint(set *outputset.PartitionedOrdered) *Metadata {
+func CreateMetadataPoint(setAbstraction sortnet.OutputSet) *Metadata {
+	md := setAbstraction.Metadata()
+
 	var ones []int
 	var zeros []int
 	var sizes []int
-	for pi := range set.Partitions {
-		sizes = append(sizes, set.PartitionSize(pi))
-		ones = append(ones, set.OnesMasks[pi].OnesCount())
-		zeros = append(zeros, set.ZerosMasks[pi].OnesCount())
+	for pi := 0; pi < len(md.PartitionSizes); pi++ {
+		sizes = append(sizes, md.PartitionSizes[pi])
+		ones = append(ones, md.OnesMasks[pi].OnesCount())
+		zeros = append(zeros, md.ZerosMasks[pi].OnesCount())
 	}
 
 	return &Metadata{
-		Size:           set.Size(),
+		Size:           md.Size,
 		Ones:           ones,
 		Zeros:          zeros,
 		PartitionSizes: sizes,
 	}
 }
 
-func subsumes(a, b *outputset.PartitionedOrdered) bool {
+func subsumes(a, b sortnet.OutputSet) bool {
 	if a.Size() > b.Size() {
 		return false
 	}
 
-	// permutation preconditions
-	for p := range a.Partitions {
-		if len(a.Partitions[p]) > len(b.Partitions[p]) {
-			return false
-		}
+	return a.IsSubset(b, nil)
+}
 
-		if a.OnesMasks[p].OnesCount() > b.OnesMasks[p].OnesCount() {
-			return false
-		}
-		if a.ZerosMasks[p].OnesCount() > b.ZerosMasks[p].OnesCount() {
-			return false
-		}
-	}
-
-	permutationConstraints := Constraints(b.Metadata, a.Metadata)
-	if !ValidateConstraintsFast(permutationConstraints) {
-		return false
-	}
-
-	return Backtrack(permutationConstraints, func(permutationMap sortnet.PermutationMap) bool {
+func subsumesByPermutation(a, b sortnet.OutputSet) bool {
+	// ST1, ST2, ST3 have moved into the KD-tree, see CreateMetadataPoint
+	return GeneratePermutations(Channels, a.Metadata(), b.Metadata(), func(permutationMap sortnet.PermutationMap) bool {
 		return a.IsSubset(b, permutationMap)
 	})
 }
 
-func Producer(tree *KDTree, sets []*outputset.PartitionedOrdered, workChan chan *Work) {
-	for currentID, currentSet := range sets {
-		if currentSet == nil {
+func Prune(sets []sortnet.OutputSet) []sortnet.OutputSet {
+	const rebuildAfter = 1000
+
+	var tree *KDTree
+	rebuild := func() {
+		tree = NewKDTree()
+		points := CreateMetadataPoints(sets)
+		tree.Insert(points)
+		tree.Balance()
+	}
+
+	bar := pb.StartNew(len(sets))
+	defer bar.Finish()
+
+	bar.SetMaxWidth(150)
+	bar.SetRefreshRate(100 * time.Millisecond)
+
+	var pruned int
+	rebuild()
+	for currentID, set := range sets {
+		bar.Increment()
+		if set == nil {
 			continue
 		}
 
-		base := CreateMetadataPoint(currentSet)
-		indexes := tree.FindCandidates(base)
+		subsumed := PruningStrategy(currentID, sets, tree)
+		shouldRebuild := false
+		for _, id := range subsumed {
+			sets[id] = nil
+			pruned++
 
-		var workSets []SetReference
-		for _, i := range indexes {
-			b := sets[i]
-			if b == currentSet || b == nil {
-				continue
+			if pruned%rebuildAfter == 0 {
+				shouldRebuild = true
 			}
-
-			workSets = append(workSets, SetReference{
-				set: b,
-				id:  i,
-			})
 		}
 
-		workChan <- &Work{
-			current: SetReference{
-				set: currentSet,
-				id:  currentID,
-			},
-			targets: workSets,
+		if shouldRebuild {
+			rebuild()
 		}
 	}
+
+	return sets
 }
 
-type SetReference struct {
-	set *outputset.PartitionedOrdered
-	id  int
+type PruneMethod = func(currentID int, sets []sortnet.OutputSet, tree *KDTree) []int
+
+func PruneSerial(currentID int, sets []sortnet.OutputSet, tree *KDTree) []int {
+	base := CreateMetadataPoint(sets[currentID])
+	indexes := tree.FindCandidates(base)
+
+	var ids []int
+	for _, i := range indexes {
+		target := sets[i]
+		if currentID == i || target == nil {
+			continue
+		}
+
+		if subsumesByPermutation(sets[currentID], target) {
+			ids = append(ids, i)
+		}
+	}
+
+	return ids
 }
 
 type Work struct {
-	current SetReference
-	targets []SetReference
-}
-
-type LookupRequest struct {
-	channel chan *LookupResult
-	ids     []int
-	id      int
-}
-
-type LookupResult struct {
-	set *outputset.PartitionedOrdered
+	set sortnet.OutputSet
 	id  int
 }
 
-func WaitForResults(ctx context.Context, sets []*outputset.PartitionedOrdered, work chan *LookupRequest) {
-	pendingWrites := map[int]*LookupRequest{}
+func PruneParallel(currentID int, sets []sortnet.OutputSet, tree *KDTree) []int {
+	g, _ := errgroup.WithContext(context.Background())
+	workChan := make(chan *Work, Workers)
 
-	for {
-		select {
-		case request := <-work:
-			pendingWrites[request.id] = request
-		case <-ctx.Done():
-			return
-		}
+	g.Go(func() error {
+		defer close(workChan)
+		base := CreateMetadataPoint(sets[currentID])
+		indexes := tree.FindCandidates(base)
 
-		if len(pendingWrites) != len(sets) {
-			continue
-		}
-
-		// delete marked sets in order
-		for i := range sets {
-			if sets[i] == nil {
+		for _, i := range indexes {
+			target := sets[i]
+			if currentID == i || target == nil {
 				continue
 			}
 
-			w := pendingWrites[i]
-			for _, id := range w.ids {
-				sets[id] = nil
+			workChan <- &Work{
+				set: target,
+				id:  i,
 			}
 		}
-		break
-	}
+		return nil
+	})
 
-}
-
-func SearchWorker(ctx context.Context, workChan chan *Work, lookupChannel chan<- *LookupRequest) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case work, ok := <-workChan:
-			if !ok {
-				return
-			}
-
-			var pruned []int
-			for _, target := range work.targets {
-				if subsumes(work.current.set, target.set) {
-					pruned = append(pruned, target.id)
+	subsumedChan := make(chan int)
+	active := int32(Workers)
+	for i := 0; i < Workers; i++ {
+		g.Go(func() error {
+			for work := range workChan {
+				if subsumesByPermutation(sets[currentID], work.set) {
+					subsumedChan <- work.id
 				}
 			}
 
-			lookupChannel <- &LookupRequest{nil, pruned, work.current.id}
-		}
+			if atomic.AddInt32(&active, -1) == 0 {
+				close(subsumedChan)
+			}
+			return nil
+		})
 	}
+
+	subsumed := map[int]bool{}
+	g.Go(func() error {
+		for id := range subsumedChan {
+			subsumed[id] = true
+		}
+		return nil
+	})
+	_ = g.Wait()
+
+	var ids []int
+	for id := range subsumed {
+		ids = append(ids, id)
+	}
+	return ids
 }

@@ -2,14 +2,24 @@ package outputset
 
 import "github.com/andersfylling/go-sortnet/sortnet"
 
-func NewPartitionedUnordered(sequenceSize int) *PartitionedUnordered {
-	return sortnet.PopulateOutputSet(&PartitionedUnordered{}, sequenceSize).(*PartitionedUnordered)
+func NewEmptyPartitionedUnordered() sortnet.OutputSet {
+	set := &PartitionedUnordered{
+		SetMetadata: &sortnet.SetMetadata{},
+	}
+	return set
+}
+
+func NewPartitionedUnordered(channels int) sortnet.OutputSet {
+	return sortnet.PopulateOutputSet(NewEmptyPartitionedUnordered(), channels)
 }
 
 type PartitionedUnordered struct {
 	Partitions [][]sortnet.BinarySequence
-	OnesMasks  []sortnet.BinarySequence
-	ZerosMasks []sortnet.BinarySequence
+	*sortnet.SetMetadata
+}
+
+func (s *PartitionedUnordered) Metadata() *sortnet.SetMetadata {
+	return s.SetMetadata
 }
 
 func (s *PartitionedUnordered) Contains(seq sortnet.BinarySequence) bool {
@@ -31,19 +41,16 @@ func (s *PartitionedUnordered) Add(seq sortnet.BinarySequence) {
 	if partition >= len(s.Partitions) {
 		for i := len(s.Partitions); i <= partition; i++ {
 			s.Partitions = append(s.Partitions, []sortnet.BinarySequence{})
-			s.OnesMasks = append(s.OnesMasks, 0)
-			s.ZerosMasks = append(s.ZerosMasks, 0)
 		}
 	}
 	if !s.ContainsInPartition(seq, partition) {
 		s.Partitions[partition] = append(s.Partitions[partition], seq)
-		s.OnesMasks[partition] |= seq
-		s.ZerosMasks[partition] |= ^seq
+		s.SetMetadata.Add(seq, partition)
 	}
 }
 
-func (s *PartitionedUnordered) Derive(network sortnet.Network) *PartitionedUnordered {
-	output := &PartitionedUnordered{}
+func (s *PartitionedUnordered) Derive(network sortnet.Network) sortnet.OutputSet {
+	output := NewEmptyPartitionedUnordered()
 
 	for _, partition := range s.Partitions {
 		for _, seq := range partition {
@@ -54,21 +61,27 @@ func (s *PartitionedUnordered) Derive(network sortnet.Network) *PartitionedUnord
 }
 
 func (s *PartitionedUnordered) Size() int {
-	var size int
-	for _, partition := range s.Partitions {
-		size += len(partition)
-	}
+	if s.SetMetadata.Size == 0 {
+		var size int
+		for _, partition := range s.Partitions {
+			size += len(partition)
+		}
 
-	return size
+		s.SetMetadata.Size = size
+	}
+	return s.SetMetadata.Size
 }
 
 func (s *PartitionedUnordered) PartitionSize(p int) int {
 	return len(s.Partitions[p])
 }
 
-func (s *PartitionedUnordered) IsSubset(other *PartitionedUnordered) bool {
+func (s *PartitionedUnordered) IsSubset(other sortnet.OutputSet, permutationMap sortnet.PermutationMap) bool {
 	for p := range s.Partitions {
 		for _, seq := range s.Partitions[p] {
+			if permutationMap != nil {
+				seq = sortnet.ApplyPermutation(seq, permutationMap)
+			}
 			if !other.ContainsInPartition(seq, p) {
 				return false
 			}

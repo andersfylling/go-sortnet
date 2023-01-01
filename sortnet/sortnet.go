@@ -2,8 +2,8 @@ package sortnet
 
 import "math/bits"
 
-const LimitSequenceSize = 16
-const LimitSequenceMask = 0b1111_1111_1111_1111
+const MaxChannels = 16
+const MaxChannelsMask = 0b1111_1111_1111_1111
 const None = 0
 
 type BinarySequence uint16
@@ -18,8 +18,8 @@ func (b BinarySequence) MostSignificantBitOffset() int {
 	return width - 1
 }
 
-func SequenceMask(sequenceSize int) BinarySequence {
-	return BinarySequence(LimitSequenceMask >> (LimitSequenceSize - sequenceSize))
+func SequenceMask(channels int) BinarySequence {
+	return BinarySequence(MaxChannelsMask >> (MaxChannels - channels))
 }
 
 func NewSequenceIterator(seq BinarySequence) *SequenceIterator {

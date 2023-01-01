@@ -4,19 +4,23 @@ import "github.com/andersfylling/go-sortnet/sortnet"
 
 func NewEmptyPartitionedOrdered() *PartitionedOrdered {
 	set := &PartitionedOrdered{
-		Metadata: &Metadata{},
+		SetMetadata: &sortnet.SetMetadata{},
 	}
 	return set
 }
 
-func NewPartitionedOrdered(sequenceSize int) *PartitionedOrdered {
-	return sortnet.PopulateOutputSet(NewEmptyPartitionedOrdered(), sequenceSize).(*PartitionedOrdered)
+func NewPartitionedOrdered(channels int) sortnet.OutputSet {
+	return sortnet.PopulateOutputSet(NewEmptyPartitionedOrdered(), channels)
 }
 
 type PartitionedOrdered struct {
 	Partitions []map[sortnet.BinarySequence]struct{}
 	Sequences  [][]sortnet.BinarySequence
-	*Metadata
+	*sortnet.SetMetadata
+}
+
+func (s *PartitionedOrdered) Metadata() *sortnet.SetMetadata {
+	return s.SetMetadata
 }
 
 func (s *PartitionedOrdered) Contains(seq sortnet.BinarySequence) bool {
@@ -36,20 +40,17 @@ func (s *PartitionedOrdered) Add(seq sortnet.BinarySequence) {
 		for i := len(s.Partitions); i <= partition; i++ {
 			s.Partitions = append(s.Partitions, map[sortnet.BinarySequence]struct{}{})
 			s.Sequences = append(s.Sequences, []sortnet.BinarySequence{})
-			s.OnesMasks = append(s.OnesMasks, 0)
-			s.ZerosMasks = append(s.ZerosMasks, 0)
 		}
 	}
 
 	if !s.ContainsInPartition(seq, partition) {
 		s.Sequences[partition] = append(s.Sequences[partition], seq)
+		s.SetMetadata.Add(seq, partition)
 	}
 	s.Partitions[partition][seq] = empty
-	s.OnesMasks[partition] |= seq
-	s.ZerosMasks[partition] |= ^seq
 }
 
-func (s *PartitionedOrdered) Derive(network sortnet.Network) *PartitionedOrdered {
+func (s *PartitionedOrdered) Derive(network sortnet.Network) sortnet.OutputSet {
 	output := NewEmptyPartitionedOrdered()
 
 	for _, partition := range s.Sequences {
@@ -61,19 +62,14 @@ func (s *PartitionedOrdered) Derive(network sortnet.Network) *PartitionedOrdered
 }
 
 func (s *PartitionedOrdered) Size() int {
-	var size int
-	for _, partition := range s.Partitions {
-		size += len(partition)
-	}
-
-	return size
+	return s.SetMetadata.Size
 }
 
 func (s *PartitionedOrdered) PartitionSize(p int) int {
-	return len(s.Partitions[p])
+	return s.SetMetadata.PartitionSizes[p]
 }
 
-func (s *PartitionedOrdered) IsSubset(other *PartitionedOrdered, permutation sortnet.PermutationMap) bool {
+func (s *PartitionedOrdered) IsSubset(other sortnet.OutputSet, permutation sortnet.PermutationMap) bool {
 	for pi := range s.Sequences {
 		for _, seq := range s.Sequences[pi] {
 			if permutation != nil {
