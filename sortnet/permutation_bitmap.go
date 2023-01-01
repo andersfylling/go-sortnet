@@ -26,6 +26,11 @@ func PermutationBitMapPositions(channels int, dst, src *SetMetadata) []BinarySeq
 	for pi := 0; pi < partitions; pi++ {
 		MapLegalPlacementsBitMap(constraints, dst.OnesMasks[pi], src.OnesMasks[pi])
 		MapLegalPlacementsBitMap(constraints, dst.ZerosMasks[pi], src.ZerosMasks[pi])
+
+		if dst.PartitionSizes[pi] == src.PartitionSizes[pi] {
+			MapLegalPlacementsBitMap(constraints, ^dst.OnesMasks[pi], ^src.OnesMasks[pi])
+			MapLegalPlacementsBitMap(constraints, ^dst.ZerosMasks[pi], ^src.ZerosMasks[pi])
+		}
 	}
 
 	return constraints

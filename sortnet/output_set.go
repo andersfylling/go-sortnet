@@ -19,7 +19,10 @@ func PopulateOutputSet(set OutputSet, channels int) OutputSet {
 	return set
 }
 
+type NetworkID int64
+
 type SetMetadata struct {
+	NetworkID
 	Size           int
 	PartitionSizes []int
 	OnesMasks      []BinarySequence
