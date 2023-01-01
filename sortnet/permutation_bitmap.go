@@ -59,7 +59,7 @@ func GeneratePermutationsByBitmap(channels int, src, dst *SetMetadata, hook Perm
 		var mask BinarySequence
 		for _, offset := range permutationMap {
 			bit := BinarySequence(0b1 << offset)
-			if bit&mask == 1 {
+			if bit&mask != 0 {
 				return true
 			}
 			mask |= bit

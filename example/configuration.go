@@ -9,7 +9,7 @@ import (
 // configurable constants
 const (
 	// Channels also known as "N", sets the number of network channels or the sequence length.
-	Channels = 9
+	Channels = 8
 	Workers  = 16
 )
 
