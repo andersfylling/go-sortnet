@@ -8,6 +8,15 @@ import (
 	"math"
 )
 
+type SearchDirection int
+
+const (
+	DirectionSubset SearchDirection = iota
+	DirectionEqual
+	DirectionEqualAndSuperset
+	DirectionSuperset
+)
+
 type Metadata struct {
 	Size           int
 	Ones           []int
@@ -68,12 +77,25 @@ func (kdt *KDTree) Points() ([]sortnet.NetworkID, []kdtree.Point) {
 	return ids, ps
 }
 
-func (kdt *KDTree) FindCandidates(point *Metadata) []sortnet.NetworkID {
+func (kdt *KDTree) FindCandidates(point *Metadata, direction SearchDirection) []sortnet.NetworkID {
 	var subsumptionRange []float64
-	for _, low := range point.Coordinates() {
-		subsumptionRange = append(subsumptionRange, low)
-		subsumptionRange = append(subsumptionRange, math.MaxFloat64)
+	for _, self := range point.Coordinates() {
+		switch direction {
+		case DirectionSubset:
+			subsumptionRange = append(subsumptionRange, 0)
+			subsumptionRange = append(subsumptionRange, self)
+		case DirectionEqual:
+			subsumptionRange = append(subsumptionRange, self)
+			subsumptionRange = append(subsumptionRange, self)
+		case DirectionEqualAndSuperset:
+			subsumptionRange = append(subsumptionRange, self)
+			subsumptionRange = append(subsumptionRange, math.MaxFloat64)
+		case DirectionSuperset:
+			subsumptionRange = append(subsumptionRange, self+1)
+			subsumptionRange = append(subsumptionRange, math.MaxFloat64)
+		}
 	}
+
 	filter := kdrange.New(subsumptionRange...)
 	matches := kdt.tree.RangeSearch(filter)
 

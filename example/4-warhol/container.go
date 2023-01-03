@@ -8,13 +8,16 @@ import (
 )
 
 type Container struct {
-	sets  []sortnet.OutputSet
-	trees map[int]*KDTree
+	sets      []sortnet.OutputSet
+	trees     map[int]*KDTree
+	dirtyTree map[int]bool
+	dirty     int
 }
 
 func (c *Container) Insert(sets []sortnet.OutputSet) {
 	if c.trees == nil {
 		c.trees = map[int]*KDTree{}
+		c.dirtyTree = map[int]bool{}
 	}
 
 	for _, set := range sets {
@@ -29,17 +32,53 @@ func (c *Container) Insert(sets []sortnet.OutputSet) {
 
 		point := CreateMetadataPoint(set)
 		c.trees[size].Insert([]*Metadata{point})
+		c.dirtyTree[size] = true
 		c.sets = append(c.sets, set)
 	}
 }
 
 func (c *Container) Balance() {
-	for _, tree := range c.trees {
-		tree.Balance()
+	for size, dirty := range c.dirtyTree {
+		c.dirtyTree[size] = false
+		if !dirty {
+			continue
+		}
+
+		c.trees[size].Balance()
 	}
 }
 
-func (c *Container) Search(set sortnet.OutputSet, result chan<- *Work) {
+func (c *Container) Search(set sortnet.OutputSet, direction SearchDirection) []sortnet.NetworkID {
+	point := CreateMetadataPoint(set)
+
+	var ids []sortnet.NetworkID
+	for treeSize, tree := range c.trees {
+		switch direction {
+		case DirectionEqualAndSuperset:
+			if treeSize < point.Size {
+				continue
+			}
+		case DirectionEqual:
+			if treeSize != point.Size {
+				continue
+			}
+		}
+
+		matches := tree.FindCandidates(point, direction)
+		for _, id := range matches {
+			target := c.sets[int(id)]
+			if target == nil || set == target {
+				continue
+			}
+
+			ids = append(ids, target.Metadata().NetworkID)
+		}
+	}
+
+	return ids
+}
+
+func (c *Container) SearchParallel(set sortnet.OutputSet, result chan<- *Work) {
 	point := CreateMetadataPoint(set)
 	size := set.Size()
 
@@ -58,12 +97,16 @@ func (c *Container) Search(set sortnet.OutputSet, result chan<- *Work) {
 		return nil
 	})
 
-	for i := 0; i < Workers; i++ {
+	workers := Workers
+	if len(c.trees) < workers {
+		workers = len(c.trees)
+	}
+
+	for i := 0; i < workers; i++ {
 		g.Go(func() error {
 			for treeSize := range work {
 				tree := c.trees[treeSize]
-				matches := tree.FindCandidates(point)
-				for _, id := range matches {
+				for _, id := range tree.FindCandidates(point, DirectionEqualAndSuperset) {
 					target := c.sets[int(id)]
 					if target == nil || set == target {
 						continue
@@ -86,6 +129,7 @@ func (c *Container) Prune(ids []sortnet.NetworkID) {
 	for _, id := range ids {
 		c.sets[int(id)] = nil
 	}
+	c.dirty += len(ids)
 }
 
 func (c *Container) Rebalance() {
@@ -101,5 +145,7 @@ func (c *Container) Rebalance() {
 		c.trees[size] = NewKDTree()
 		c.trees[size].InsertRaw(remaining)
 		c.trees[size].Balance()
+		c.dirtyTree[size] = false
 	}
+	c.dirty = 0
 }

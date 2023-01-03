@@ -28,8 +28,12 @@ func PermutationBitMapPositions(channels int, dst, src *SetMetadata) []BinarySeq
 		MapLegalPlacementsBitMap(constraints, dst.ZerosMasks[pi], src.ZerosMasks[pi])
 
 		if dst.PartitionSizes[pi] == src.PartitionSizes[pi] {
+			// if we can create a permutations based on the set bits, we can also apply the same logic for unset bits
 			MapLegalPlacementsBitMap(constraints, ^dst.OnesMasks[pi], ^src.OnesMasks[pi])
 			MapLegalPlacementsBitMap(constraints, ^dst.ZerosMasks[pi], ^src.ZerosMasks[pi])
+
+			// TODO: if a permutation of set A can "subsume" set B, in a given partition of the same size, the same
+			//  must also be true the other way around for the inverse permutation map.
 		}
 	}
 

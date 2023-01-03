@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"github.com/andersfylling/go-sortnet/example"
 	"github.com/andersfylling/go-sortnet/sortnet"
 	"github.com/andersfylling/go-sortnet/sortnet/outputset"
 	"github.com/cheggaaa/pb/v3"
-	"golang.org/x/sync/errgroup"
 	"sync/atomic"
 	"time"
 )
@@ -44,12 +42,12 @@ func run() {
 
 	k := 0
 	for {
+		fmt.Println()
 		fmt.Printf("Round %d\n", k+1)
 		k++
 
 		var sets []sortnet.OutputSet
 		networks, sets = Generate(allComparators, networks)
-		fmt.Printf("\tgenerated %d networks & output sets\n", len(networks))
 
 		sets = Prune(sets)
 
@@ -85,28 +83,94 @@ func NetworksWithNonNilOutputset(sets []sortnet.OutputSet, networks []sortnet.Ne
 	return selected
 }
 
+type GenerateWork struct {
+	network sortnet.Network
+	set     sortnet.OutputSet
+}
+
 func Generate(comparators []sortnet.Comparator, networks []sortnet.Network) ([]sortnet.Network, []sortnet.OutputSet) {
-	derivatives := make([]sortnet.Network, 0, len(networks))
-	sets := make([]sortnet.OutputSet, 0, len(networks))
+	bar := pb.StartNew(len(networks))
+	defer bar.Finish()
+	defer bar.SetCurrent(bar.Total())
 
-	var id sortnet.NetworkID
-	for _, network := range networks {
-		set := NewSet(Channels)
-		set = set.Derive(network)
+	bar.SetMaxWidth(100)
+	bar.SetRefreshRate(100 * time.Millisecond)
 
-		for _, child := range network.Derive(comparators) {
-			childSet := NewSet(Channels)
-			childSet = childSet.Derive(child)
+	workChan := make(chan *GenerateWork, Workers)
 
-			if subsumes(set, childSet) {
-				continue
+	go func() {
+		defer close(workChan)
+		for _, network := range networks {
+			workChan <- &GenerateWork{network: network}
+		}
+	}()
+
+	mergeChan := make(chan *GenerateWork, Workers)
+	active := int32(Workers)
+	for i := 0; i < Workers; i++ {
+		go func() {
+			tree := &Container{}
+			var children []*GenerateWork
+			var localID sortnet.NetworkID
+
+			for work := range workChan {
+				set := NewSet(Channels)
+				set = set.Derive(work.network)
+
+				left := localID
+				for _, child := range work.network.Derive(comparators) {
+					childSet := NewSet(Channels)
+					childSet = childSet.Derive(child)
+					childSet.Metadata().NetworkID = localID
+
+					if set.Size() == childSet.Size() && set.IsSubset(childSet, nil) {
+						continue
+					}
+
+					children = append(children, &GenerateWork{
+						network: child,
+						set:     childSet,
+					})
+					tree.Insert([]sortnet.OutputSet{childSet})
+					localID++
+				}
+
+				tree.Balance()
+				for id := int(left); id < len(tree.sets); id++ {
+					if tree.sets[id] == nil {
+						continue
+					}
+					tree.Prune(PruneParallel(id, tree.sets, tree))
+				}
+
+				if tree.dirty > 1000 {
+					tree.Rebalance()
+				}
+				bar.Increment()
 			}
 
-			childSet.Metadata().NetworkID = id
-			derivatives = append(derivatives, child)
-			sets = append(sets, childSet)
-			id++
-		}
+			for id := range tree.sets {
+				if tree.sets[id] == nil {
+					continue
+				}
+				mergeChan <- children[id]
+			}
+
+			if atomic.AddInt32(&active, -1) == 0 {
+				close(mergeChan)
+			}
+		}()
+	}
+
+	var derivatives []sortnet.Network
+	var sets []sortnet.OutputSet
+	var id sortnet.NetworkID
+	for work := range mergeChan {
+		work.set.Metadata().NetworkID = id
+		id++
+
+		derivatives = append(derivatives, work.network)
+		sets = append(sets, work.set)
 	}
 
 	return derivatives, sets
@@ -133,14 +197,6 @@ func CreateMetadataPoint(setAbstraction sortnet.OutputSet) *Metadata {
 	}
 }
 
-func subsumes(a, b sortnet.OutputSet) bool {
-	if a.Size() > b.Size() {
-		return false
-	}
-
-	return a.IsSubset(b, nil)
-}
-
 func subsumesByPermutation(a, b sortnet.OutputSet) bool {
 	// ST1, ST2, ST3 have moved into the KD-tree, see CreateMetadataPoint
 	return GeneratePermutations(Channels, a.Metadata(), b.Metadata(), func(permutationMap sortnet.PermutationMap) bool {
@@ -153,8 +209,9 @@ func Prune(sets []sortnet.OutputSet) []sortnet.OutputSet {
 
 	bar := pb.StartNew(len(sets))
 	defer bar.Finish()
+	defer bar.SetCurrent(bar.Total())
 
-	bar.SetMaxWidth(150)
+	bar.SetMaxWidth(100)
 	bar.SetRefreshRate(100 * time.Millisecond)
 
 	tree := &Container{}
@@ -162,10 +219,10 @@ func Prune(sets []sortnet.OutputSet) []sortnet.OutputSet {
 	tree.Balance()
 
 	for currentID := range tree.sets {
-		bar.Increment()
 		if tree.sets[currentID] == nil {
 			continue
 		}
+		bar.SetCurrent(int64(currentID))
 
 		subsumed := PruningStrategy(currentID, sets, tree)
 		tree.Prune(subsumed)
@@ -201,19 +258,17 @@ type Work struct {
 }
 
 func PruneParallel(currentID int, sets []sortnet.OutputSet, tree *Container) []sortnet.NetworkID {
-	g, _ := errgroup.WithContext(context.Background())
 	workChan := make(chan *Work, Workers)
 
-	g.Go(func() error {
+	go func() {
 		defer close(workChan)
-		tree.Search(sets[currentID], workChan)
-		return nil
-	})
+		tree.SearchParallel(sets[currentID], workChan)
+	}()
 
 	subsumedChan := make(chan sortnet.NetworkID)
 	active := int32(Workers)
 	for i := 0; i < Workers; i++ {
-		g.Go(func() error {
+		go func() {
 			for work := range workChan {
 				if subsumesByPermutation(sets[currentID], work.set) {
 					subsumedChan <- work.id
@@ -223,21 +278,11 @@ func PruneParallel(currentID int, sets []sortnet.OutputSet, tree *Container) []s
 			if atomic.AddInt32(&active, -1) == 0 {
 				close(subsumedChan)
 			}
-			return nil
-		})
+		}()
 	}
 
-	subsumed := map[sortnet.NetworkID]bool{}
-	g.Go(func() error {
-		for id := range subsumedChan {
-			subsumed[id] = true
-		}
-		return nil
-	})
-	_ = g.Wait()
-
 	var ids []sortnet.NetworkID
-	for id := range subsumed {
+	for id := range subsumedChan {
 		ids = append(ids, id)
 	}
 	return ids
