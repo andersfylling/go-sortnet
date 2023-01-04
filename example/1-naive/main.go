@@ -20,9 +20,9 @@ var (
 )
 
 func init() {
-	if example.PruningStrategy == example.ParallelPruning {
-		panic("parallel pruning has not been implemented")
-	}
+	//if example.PruningStrategy == example.ParallelPruning {
+	//	panic("parallel pruning has not been implemented")
+	//}
 }
 
 func main() {

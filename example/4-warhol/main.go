@@ -12,8 +12,9 @@ import (
 
 // see example/configuration.go
 const (
-	Channels = example.Channels
-	Workers  = example.Workers
+	Channels     = example.Channels
+	Workers      = example.Workers
+	FiltersLimit = example.FiltersLimit
 )
 
 // configurable variables
@@ -34,7 +35,12 @@ func main() {
 	run()
 }
 
+var programStart = time.Now()
+
 func run() {
+	defer func() {
+		fmt.Printf("program finished in %s\n", time.Now().Sub(programStart))
+	}()
 	allComparators := sortnet.AllComparatorCombinations(Channels)
 	networks := []sortnet.Network{
 		&sortnet.ComparatorNetwork{},
@@ -55,20 +61,15 @@ func run() {
 		networks = NetworksWithNonNilOutputset(sets, networks)
 		fmt.Printf("\tpruned %d networks - %d remaining\n", before-len(networks), len(networks))
 
-		if len(networks) == 1 && k > 1 || k > 50 {
+		if len(networks) == 1 && k > 1 || k == FiltersLimit {
 			break
 		}
 	}
 
-	var sortingNetwork sortnet.Network
-	for _, network := range networks {
-		if network != nil {
-			sortingNetwork = network
-		}
+	if len(networks) == 1 {
+		fmt.Println("Sorting network discovered")
+		fmt.Println(networks[0])
 	}
-
-	fmt.Println("Network")
-	fmt.Println(sortingNetwork)
 }
 
 func NetworksWithNonNilOutputset(sets []sortnet.OutputSet, networks []sortnet.Network) []sortnet.Network {
@@ -179,9 +180,9 @@ func Generate(comparators []sortnet.Comparator, networks []sortnet.Network) ([]s
 func CreateMetadataPoint(setAbstraction sortnet.OutputSet) *Metadata {
 	md := setAbstraction.Metadata()
 
-	var ones []int
-	var zeros []int
-	var sizes []int
+	ones := make([]int, 0, len(md.OnesMasks))
+	zeros := make([]int, 0, len(md.ZerosMasks))
+	sizes := make([]int, 0, len(md.PartitionSizes))
 	for pi := 0; pi < len(md.PartitionSizes); pi++ {
 		sizes = append(sizes, md.PartitionSizes[pi])
 		ones = append(ones, md.OnesMasks[pi].OnesCount())

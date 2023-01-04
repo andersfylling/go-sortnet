@@ -26,8 +26,8 @@ type Metadata struct {
 }
 
 func (md *Metadata) Coordinates() []float64 {
-	coordinates := []float64{}
-	for pi := range md.PartitionSizes {
+	coordinates := make([]float64, 0, len(md.PartitionSizes)+len(md.Ones)+len(md.Zeros))
+	for pi := 0; pi < len(md.PartitionSizes); pi++ {
 		coordinates = append(coordinates, float64(md.PartitionSizes[pi]))
 		coordinates = append(coordinates, float64(md.Ones[pi]))
 		coordinates = append(coordinates, float64(md.Zeros[pi]))
@@ -78,8 +78,10 @@ func (kdt *KDTree) Points() ([]sortnet.NetworkID, []kdtree.Point) {
 }
 
 func (kdt *KDTree) FindCandidates(point *Metadata, direction SearchDirection) []sortnet.NetworkID {
-	var subsumptionRange []float64
-	for _, self := range point.Coordinates() {
+	coordinates := point.Coordinates()
+	subsumptionRange := make([]float64, 0, len(coordinates)*2)
+	for i := 0; i < len(coordinates); i++ {
+		self := coordinates[i]
 		switch direction {
 		case DirectionSubset:
 			subsumptionRange = append(subsumptionRange, 0)

@@ -14,11 +14,12 @@ func PermutationBitMapPositions(channels int, dst, src *SetMetadata) []BinarySeq
 	// assert len(src.ZerosMasks) == len(dst.ZerosMasks)
 
 	partitions := len(src.OnesMasks)
-	constraints := make([]BinarySequence, partitions)
+	constraints := make([]BinarySequence, channels)
 
 	// set every relevant bit to start off with no constraints
+	noConstraints := SequenceMask(channels)
 	for i := range constraints {
-		constraints[i] = SequenceMask(channels)
+		constraints[i] = noConstraints
 	}
 
 	// as we identify relations between the two sets we start introducing constraints for
